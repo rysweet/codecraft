@@ -1,42 +1,38 @@
 #!/usr/bin/env python
 """
-Micro‑Spec · bootstrap_spec_dialog
-=================================
-**Purpose**  – Provide a stand‑alone helper that bootstraps Markdown specs through an iterative LLM dialog.
+bootstrap_spec_dialog.py  (v0.7)
+--------------------------------
+Interactive (manual) **and** automatic two‑persona refinement of a Markdown spec.
 
-**Scope / Responsibilities**
-1. Load or create `specs/00_overview.md`.
-2. Ask *one* clarifying question at a time (Azure OpenAI, bearer‑token auth).
-3. Read the user’s CLI answer.
-4. Generate a unified‑diff patch and apply it via a 3‑tier strategy:
-   1. Direct unidiff apply.
-   2. Smart hunk insertion (context anchoring).
-   3. Append diff under marker and auto‑reorder headings.
-5. Optional `--reorder` flag alphabetises top‑level headings.
+Personae
+========
+• **PM‑Interviewer** – asks one clarifying question per turn.
+• **Architect‑Responder** – expert software architect; answers with clear, concise guidance.
 
-**Guardrails**
-* Must use bearer‑token auth (`DefaultAzureCredential`).
-* No plaintext API keys committed.
-* On patch failure write `.rej` or append marker; never overwrite spec blindly.
-* Lint: `ruff`, typecheck: `mypy`, formatter: `black`.  (Handled by CodeCraft guardrail script.)
+Modes
+=====
+1. **Manual** (default) – PM asks a question, *you* answer.
+2. **Auto** (`--auto`) – PM and Architect converse for `AUTO_TURNS` cycles (from `.env`).
+   After those turns the script pauses for user input:
+      `[c]ontinue  [e]dit spec manually  [d]one`
 
-**Out of scope**
-* Fancy diff merge algorithms (3‑way merge, AST‑aware).
-* GUI – purely CLI.
+Key Features
+============
+• Azure OpenAI bearer‑token auth (DefaultAzureCredential).
+• Patch apply pipeline: direct → smart‑insert → append & reorder headings.
+• Optional heading re‑order utility (`--reorder`).
+• Config loaded from `$REPO/.codecraft/.env` or fallback `.env`.
 
-**Acceptance tests** (to be scripted later)
-* Start with minimal spec ➜ run tool ➜ answer Q ➜ file updated ✔︎
-* Simulate bad diff ➜ ensure marker appended & headings reordered ✔︎
-* `--reorder` alone reorders H1 blocks alphabetically ✔︎
+Guardrails
+==========
+• No plaintext OpenAI keys committed.
+• On patch failure never overwrite spec blindly.
+• Lint/type formatting handled by CodeCraft guardrail script.
+
+Env Vars
+========
+AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AUTO_TURNS (default 4)
 """
-
-# ---------------------------------------------------------------------
-# bootstrap_spec_dialog.py  (v0.6)
-# ---------------------------------------------------------------------
-# Iterative helper that refines a Markdown spec via Azure OpenAI.
-# Searches for .env in `.codecraft/.env` then repo root.
-# ---------------------------------------------------------------------
-
 from __future__ import annotations
 import os, sys, pathlib, re
 from datetime import datetime
@@ -50,17 +46,19 @@ from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 console = Console()
 
-# ────────────────── .env loading ─────────────────────────────────────────
+# ── .env loading ─────────────────────────────────────────────────────────
 ROOT = pathlib.Path.cwd()
 CODECRAFT_ENV = ROOT / ".codecraft" / ".env"
 if CODECRAFT_ENV.exists():
     load_dotenv(dotenv_path=CODECRAFT_ENV, override=False)
 else:
-    fallback_env = find_dotenv(usecwd=True)
-    if fallback_env:
-        load_dotenv(fallback_env, override=False)
+    fe = find_dotenv(usecwd=True)
+    if fe:
+        load_dotenv(fe, override=False)
 
-# ────────────────── Azure OpenAI client ──────────────────────────────────
+AUTO_TURNS = int(os.getenv("AUTO_TURNS", "4"))
+
+# ── Azure OpenAI client ──────────────────────────────────────────────────
 ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT")
 DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 API_VERS   = "2025-03-01-preview"
@@ -74,18 +72,28 @@ client = AzureOpenAI(
     ),
 )
 
-# ────────────────── Paths ────────────────────────────────────────────────
+# ── Paths ────────────────────────────────────────────────────────────────
 SPEC_PATH = ROOT / "specs" / "00_overview.md"
 SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
 if not SPEC_PATH.exists():
     SPEC_PATH.write_text("# Rough Sketch\n\n_TODO: describe your idea here._\n")
 
-# ────────────────── LLM prompts ──────────────────────────────────────────
-SYS_ASK = (
-    "You are a senior PM AI. From the current spec, output exactly ONE clarifying question that moves it toward a shippable overview."
+# ── System prompts ───────────────────────────────────────────────────────
+SYS_PM_ASK = (
+    "You are a senior PM AI interviewing an expert architect. From the current "
+    "Markdown spec, ask **one** clarifying question that will move the spec closer "
+    "to a shippable overview."
 )
+
+SYS_ARCH_ANSWER = (
+    "You are an expert software architect. Answer the PM's question with clear, concise "
+    "guidance—well‑specified, elegant, compact. If you feel unsure, prefix your answer "
+    "with 'SEARCH:' followed by a query you would run. Keep creativity reasonable."
+)
+
 SYS_PATCH = (
-    "You are an expert editor. Given the user's answer, output a unified git diff that updates the Markdown spec."
+    "You are an expert editor. Given the architect's answer and the current spec, "
+    "output a unified git diff that updates the Markdown spec accordingly."
 )
 
 def ask_llm(messages: List[dict]) -> str:
@@ -95,10 +103,10 @@ def ask_llm(messages: List[dict]) -> str:
         max_completion_tokens=2048,
     ).choices[0].message.content.strip()
 
-# ────────────────── Diff helpers ─────────────────────────────────────────
+# ── Diff helpers ─────────────────────────────────────────────────────────
 
 def _apply_diff(original: List[str], patch: PatchedFile) -> List[str] | None:
-    out, idx = [], 0
+    idx, out = 0, []
     try:
         for h in patch:
             while idx < h.source_start - 1:
@@ -115,9 +123,9 @@ def _apply_diff(original: List[str], patch: PatchedFile) -> List[str] | None:
 
 
 def reorder_headings(md_text: str) -> str:
-    blocks = re.split(r"(?m)^# (.+)$", md_text)
-    intro = blocks[0]
-    titled = list(zip(blocks[1::2], blocks[2::2]))
+    parts = re.split(r"(?m)^# (.+)$", md_text)
+    intro = parts[0]
+    titled = list(zip(parts[1::2], parts[2::2]))
     titled.sort(key=lambda t: t[0].lower())
     return intro + "".join(f"# {h}{b}" for h, b in titled)
 
@@ -129,14 +137,14 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         console.print("[red]❌ Empty diff from LLM"); return
     target = patchset[0]
 
-    # 1️⃣ direct apply
+    # direct
     patched = _apply_diff(original, target)
     if patched:
         spec_path.write_text("".join(patched))
         console.print("[green]✓ patch applied (direct)")
         return
 
-    # 2️⃣ smart insert
+    # smart insert
     console.print("[yellow]Direct failed → smart insert…")
     smart = original[:]
     for h in target:
@@ -145,50 +153,61 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
             smart.insert(smart.index(ctx), *(l.value for l in h if l.is_added))
         else:
             break
-    else:  # no break ⇒ success
+    else:
         spec_path.write_text("".join(smart))
         console.print("[green]✓ patch applied (smart)")
         return
 
-    # 3️⃣ append + reorder
-    console.print("[red]Smart insert failed → append diff & reorder headings")
+    # append fallback + reorder
+    console.print("[red]Smart insert failed → append & reorder headings")
     marker = f"\n<!-- OUT-OF-ORDER PATCH {datetime.utcnow().isoformat()} -->\n"
     spec_path.write_text(spec_path.read_text() + marker + diff_text)
     spec_path.write_text(reorder_headings(spec_path.read_text()))
     console.print("[green]✓ appended & reordered")
 
-# ────────────────── Interactive loop ─────────────────────────────────────
+# ── Auto dialog helpers ──────────────────────────────────────────────────
 
-def interactive():
-    spec_text = SPEC_PATH.read_text()
+def auto_turn(spec_text: str) -> str:
+    """Run one interviewer→architect→patch cycle and return new spec text."""
+    question = ask_llm([
+        {"role": "system", "content": SYS_PM_ASK},
+        {"role": "user", "content": spec_text},
+    ])
+    answer = ask_llm([
+        {"role": "system", "content": SYS_ARCH_ANSWER},
+        {"role": "user", "content": question},
+    ])
+    console.print(Panel(question, title="PM Question", style="cyan"))
+    console.print(Panel(answer, title="Architect Answer", style="green"))
+    diff = ask_llm([
+        {"role": "system", "content": SYS_PATCH},
+        {"role": "user", "content": f"SPEC:\n{spec_text}\nANSWER:\n{answer}"},
+    ])
+    console.print(Panel(diff, title="Patch", style="magenta"))
+    apply_patch_pipeline(SPEC_PATH, diff)
+    return SPEC_PATH.read_text()
+
+# ───────────────── Interactive loops ─────────────────────────────────────
+
+def manual_loop():
+    spec = SPEC_PATH.read_text()
     while True:
-        question = ask_llm([
-            {"role": "system", "content": SYS_ASK},
-            {"role": "user", "content": spec_text},
+        q = ask_llm([
+            {"role": "system", "content": SYS_PM_ASK},
+            {"role": "user", "content": spec},
         ])
-        console.print(Panel(question, title="Clarifying Question", style="cyan"))
-        answer = console.input("[bold green]Your answer (or /done): [/] ")
-        if answer.strip().lower() == "/done":
+        console.print(Panel(q, title="Clarifying Question", style="cyan"))
+        ans = console.input("[bold green]Your answer (or /done): [/] ")
+        if ans.strip().lower() == "/done":
             break
         diff = ask_llm([
             {"role": "system", "content": SYS_PATCH},
-            {"role": "user", "content": f"SPEC:\n{spec_text}\nANSWER:\n{answer}"},
+            {"role": "user", "content": f"SPEC:\n{spec}\nANSWER:\n{ans}"},
         ])
         console.print(Panel(diff, title="Proposed Patch", style="magenta"))
         apply_patch_pipeline(SPEC_PATH, diff)
-        spec_text = SPEC_PATH.read_text()
+        spec = SPEC_PATH.read_text()
 
-# ────────────────── CLI entry ─────────────────────────────────────────────
 
-def main():
-    if "--reorder" in sys.argv:
-        SPEC_PATH.write_text(reorder_headings(SPEC_PATH.read_text()))
-        console.print("[green]Headings reordered.")
-    else:
-        interactive()
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        console.print("\n[red]Interrupted")
+def auto_loop():
+    spec = SPEC_PATH.read
