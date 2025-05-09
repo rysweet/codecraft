@@ -1,7 +1,7 @@
 ---
 
 title: "CodeCraft – Spec‑First Development Platform Overview"
-spec\_version: "1.2.0"
+spec\_version: "1.3.0"
 last\_updated: 2025-05-08
 owner: pma
 status: draft
@@ -11,58 +11,69 @@ tokens\_budget: 16000
 
 # 1 · Vision
 
-**CodeCraft** is a **local‑first, agent‑driven companion** that helps senior developers and PMs stay in flow while designing, generating, and maintaining software via a spec‑first methodology. It ships as a **VS Code extension** that spins up a local stack, surfaces chat‑based workflow guidance, and evolves its own specs as it works.
+**CodeCraft** is a **local‑first, agent‑driven companion** that keeps senior developers and PMs in flow while they design, generate, and maintain software via a spec‑first methodology. It ships as a **VS Code extension** that spins up a local stack, surfaces chat‑based workflow guidance, and continually improves its own specs.
 
 ---
 
 # 2 · Initial‑Release Goals (Level 0)
 
-| Goal                           | Notes                                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| **VS Code extension panels**   | ① Chat (Dialog Agent)  ② Graph Explorer  ③ Guardrail Dashboard                             |
-| **Interactive dialog mode**    | Proactive suggestions; periodic conversation summaries stored in **MCP Neo4j Memory**      |
-| **Code‑understanding service** | Neo4j + MCP Cypher; graph built by **Blarify** (Tree‑sitter). Languages: Python, JS/TS, C# |
-| **Guardrail‑driven agents**    | Autogen‑core Coding‑Agent *pairs* enforce tests/format/docs through a local CI shim        |
-| **Self‑improving loop**        | Trace‑Watcher Agent patches specs/backlog and pushes PRs with descriptive commit messages  |
-
-*(Cloud/Kubernetes scale‑out intentionally deferred.)*
+| Goal                           | Notes                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| **VS Code extension panels**   | ① Chat (Dialog Agent)  ② Graph Explorer  ③ Guardrail Dashboard                                |
+| **Interactive dialog mode**    | Proactive suggestions; periodic conversation summaries in **MCP Neo4j Memory**                |
+| **Code‑understanding service** | Neo4j + MCP Cypher; graph built by **Blarify** (Tree‑sitter). Languages ≥ Python · JS/TS · C# |
+| **Guardrail‑driven agents**    | Autogen‑core **Coding‑Agent pairs** enforce tests/format/docs via local CI shim               |
+| **Self‑improving loop**        | Trace‑Watcher Agent patches specs/backlog and opens PRs with descriptive commits              |
 
 ---
 
 # 3 · Core Components
 
-1. **Spec Repository** — Markdown specs, prompts, backlog, docs, source in Git
-2. **Dialog Agent** — Q\&A in Chat panel; patches specs live
-3. **Trace‑Watcher Agent** — Observes Error‑Trace events; patches specs/backlog
-4. **Program‑Manager Agent (PMA)** — Batch spec governance when dialog is off
-5. **Decomposer Agent** — Breaks component specs into micro‑specs
-6. **Coding‑Agent Pairs** — Dev Agent + Review Agent for each assigned micro‑spec
-7. **DevOps Agent** — Local packaging and CI harness
-8. **Local Orchestrator** — Scheduler + CloudEvents router (Python FastAPI)
-9. **Code‑Understanding Service** — Neo4j + MCP Cypher, populated by Blarify workers
-10. **MCP Memory Server** — Conversation store (replaces SQLite)
-11. **CodeCraft Extension** — VS Code UI panels + CLI wrapper
-12. **CodeCraft CLI** — `codecraft <verb>` commands for headless/CI mode
-13. **LLM Gateway** — Azure OpenAI proxy with retry, logging, cost tracking
+1. **Spec Repository** — Markdown specs, prompts, backlog, docs, source in Git
+2. **Dialog Agent** — Chat Q\&A; patches specs live
+3. **Trace‑Watcher Agent** — Observes Error‑Trace events; patches specs/backlog
+4. **Program‑Manager Agent (PMA)** — Batch spec governance
+5. **Decomposer Agent** — Splits component specs into micro‑specs
+6. **Coding‑Agent Pairs** — Dev + Review agent per micro‑spec
+7. **DevOps Agent** — Local packaging & CI harness
+8. **Local Orchestrator** — Uses Autogen‑core’s in‑process router (no external bus)
+9. **Code‑Understanding Service** — Neo4j + MCP Cypher populated by Blarify
+10. **MCP Memory Server** — Hierarchical agent memory (task, episodic, whiteboard)
+11. **CodeCraft Extension** — VS Code UI panels + CLI wrapper
+12. **CodeCraft CLI** — `codecraft <verb>` commands for headless / CI
+13. **LLM Gateway** — Azure OpenAI proxy with retry, logging, cost tracking
 
 ### 3.1 Coding‑Agent Pair Rules
 
-| Rule                              | Behaviour                                                                                                                             |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pair lifecycle**                | *Dev* + *Review* Agents spawn together per micro‑spec; share context; terminate together.                                             |
-| **Concurrency**                   | Config flag `pairs=N` (default **10**). Orchestrator schedules at most N concurrent micro‑specs.                                      |
-| **Guardrail enforcement**         | Review Agent runs `guardrail_check.py` after every change; blocks merge on failure.                                                   |
-| **Escalation flow**               | After three failed retries, Review Agent triggers a self‑reflection prompt, and on fourth failure logs backlog entry + VS Code toast. |
-| **No mocks in integration tests** | Review Agent greps `tests/integration` for `unittest.mock` / `pytest‑mock`.                                                           |
-| **Pair chat**                     | Logged to MCP Memory for later summarisation.                                                                                         |
+| Rule                              | Behaviour                                                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Pair lifecycle**                | Dev + Review spawn together per micro‑spec; share context; terminate together.                                 |
+| **Concurrency**                   | Config `pairs=N` (default **10**); Orchestrator spawns ≤ N pairs concurrently.                                 |
+| **Guardrail enforcement**         | Review runs `guardrail_check.py` after every Dev change; blocks merge on failure.                              |
+| **Escalation flow**               | After 3 failed retries Review triggers a reflection prompt; on 4th failure logs backlog entry + VS Code toast. |
+| **No mocks in integration tests** | Review greps `tests/integration` for `unittest.mock` / `pytest‑mock`.                                          |
+| **Pair chat**                     | Logged to MCP Memory for summarisation.                                                                        |
 
 ### 3.2 Runtime & Concurrency Decisions
 
-* **Process model** — **One container per agent type** (internal async tasks for each pair).
-* **Secrets** — Azure keys via env‑vars loaded from `.codecraft/.env` (VS Code Secret Storage optional later).
-* **Logs** — Structured JSON; Orchestrator streams via WebSocket to dashboard.
-* **Python** — Base image pins **Python 3.11**.
-* **Sandbox** — Dev Agent executes tests/lint inside disposable job containers.
+* **Process model** — One Docker container per agent *type* (async tasks inside).
+* **Task state** — JSON files in `.codecraft/state/task‑<id>.json`; re‑queued on restart if unfinished.
+* **Secrets & auth** — `.env‑template` placeholders; prefer Azure AD bearer tokens (`DefaultAzureCredential`) or Key Vault. Plain keys fallback.
+* **Logs** — Structured JSON in `.codecraft/logs/YYYYMMDD/`; WS streamed; auto‑prune 30 days.
+* **Python** — Latest stable (currently 3.12).
+* **Sandbox** — Each micro‑spec runs in a disposable job container (workspace ro bind‑mount).
+
+### 3.3 Agent Memory Model (MCP Neo4j Memory)
+
+| Layer          | Node label        | Purpose                                    |
+| -------------- | ----------------- | ------------------------------------------ |
+| **Task**       | `:TaskMemory`     | Current micro‑spec notes & next steps      |
+| **Episodic**   | `:EpisodicMemory` | Summaries & long‑term decisions            |
+| **Whiteboard** | `:Whiteboard`     | Shared goals, bullet status, task division |
+
+### 3.4 Coding‑Agent Implementation Abstraction
+
+`CodingAgentProvider` interface allows plugging in **Claude Code CLI**, **OpenAI Codex CLI**, **SWE‑agent CLI**, etc. Providers register via entry‑points and are selected in `.codecraft/config.toml`.
 
 ---
 
@@ -147,4 +158,6 @@ Conversation data: verbatim turns are transient; every *N* turns a `Conversation
 
 # 10 · Open Questions
 
-1. **Schema versioning** – settle on Neo4
+1. **Schema versioning** – settle on Neo4j strategy and encode in metadata node
+2. **Graph visualiser library** – choose D3.js vs Vis.js vs Cytoscape for VS Code WebView
+3. **CLI plugin architecture** – pick Click/Typer/Argh or custom modular CLI
