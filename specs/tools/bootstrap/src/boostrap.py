@@ -27,14 +27,13 @@ Guardrails
 ==========
 • No plaintext OpenAI keys committed.
 • On patch failure never overwrite spec blindly.
-• Lint/type formatting handled by CodeCraft guardrail script.
 
 Env Vars
 ========
 AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AUTO_TURNS (default 4)
 """
 from __future__ import annotations
-import os, sys, pathlib, re
+import os, sys, pathlib, re, subprocess
 from datetime import datetime
 from typing import List
 from dotenv import load_dotenv, find_dotenv
@@ -43,6 +42,7 @@ from rich.panel import Panel
 from unidiff import PatchSet, PatchedFile
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+import argparse
 
 console = Console()
 
@@ -58,10 +58,25 @@ else:
 
 AUTO_TURNS = int(os.getenv("AUTO_TURNS", "4"))
 
+"""
+Azure CLI login logic moved to `azure_cli_login` function to avoid execution on import.
+"""
+
+def azure_cli_login():
+    """Perform Azure CLI login and set subscription based on env vars."""
+    tenant = os.getenv("AZURE_TENANT_ID")
+    subscription = os.getenv("AZURE_SUBSCRIPTION_ID")
+    if tenant:
+        console.print(f"[blue]Logging in to Azure tenant {tenant}[/]")
+        subprocess.run(["az", "login", "--tenant", tenant], check=True)
+    if subscription:
+        console.print(f"[blue]Setting default subscription to {subscription}[/]")
+        subprocess.run(["az", "account", "set", "--subscription", subscription], check=True)
+
 # ── Azure OpenAI client ──────────────────────────────────────────────────
 ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT")
 DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
-API_VERS   = "2025-03-01-preview"
+API_VERS   = os.getenv("AZURE_OPENAI_API_VERSION", "2025-03-01-preview")
 
 client = AzureOpenAI(
     azure_endpoint=ENDPOINT,
@@ -73,7 +88,8 @@ client = AzureOpenAI(
 )
 
 # ── Paths ────────────────────────────────────────────────────────────────
-SPEC_PATH = ROOT / "specs" / "00_overview.md"
+SPEC_PATH     = ROOT / "specs" / "00_Overview.md"
+TMP_SPEC_PATH = SPEC_PATH.with_suffix(SPEC_PATH.suffix + ".tmp")   # add .tmp suffix
 SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
 if not SPEC_PATH.exists():
     SPEC_PATH.write_text("# Rough Sketch\n\n_TODO: describe your idea here._\n")
@@ -190,24 +206,73 @@ def auto_turn(spec_text: str) -> str:
 # ───────────────── Interactive loops ─────────────────────────────────────
 
 def manual_loop():
-    spec = SPEC_PATH.read_text()
+    # initialize temp file from real spec if not present
+    if not TMP_SPEC_PATH.exists():
+        TMP_SPEC_PATH.write_text(SPEC_PATH.read_text())
+    spec = TMP_SPEC_PATH.read_text()
     while True:
         q = ask_llm([
             {"role": "system", "content": SYS_PM_ASK},
-            {"role": "user", "content": spec},
+            {"role": "user",   "content": spec},
         ])
         console.print(Panel(q, title="Clarifying Question", style="cyan"))
-        ans = console.input("[bold green]Your answer (or /done): [/] ")
-        if ans.strip().lower() == "/done":
+        ans = console.input("[bold green]Your answer (/save to commit, /done to exit): [/] ")
+        cmd = ans.strip().lower()
+        if cmd == "/save":
+            TMP_SPEC_PATH.replace(SPEC_PATH)
+            console.print(f"[green]✓ Saved changes to {SPEC_PATH}")
+            # re-init temp from saved spec
+            TMP_SPEC_PATH.write_text(SPEC_PATH.read_text())
+            spec = TMP_SPEC_PATH.read_text()
+            continue
+        if cmd == "/done":
+            TMP_SPEC_PATH.unlink(missing_ok=True)
             break
+        # for any other input, treat as architect answer
         diff = ask_llm([
             {"role": "system", "content": SYS_PATCH},
-            {"role": "user", "content": f"SPEC:\n{spec}\nANSWER:\n{ans}"},
+            {"role": "user",   "content": f"SPEC:\n{spec}\nANSWER:\n{ans}"},
         ])
         console.print(Panel(diff, title="Proposed Patch", style="magenta"))
-        apply_patch_pipeline(SPEC_PATH, diff)
-        spec = SPEC_PATH.read_text()
+        apply_patch_pipeline(TMP_SPEC_PATH, diff)
+        spec = TMP_SPEC_PATH.read_text()
 
 
 def auto_loop():
-    spec = SPEC_PATH.read
+    spec = SPEC_PATH.read_text()
+    for _ in range(AUTO_TURNS):
+        spec = auto_turn(spec)
+    while True:
+        cmd = console.input(
+            "[bold cyan]Auto mode done. Edit spec manually, or choose an action:  "
+            "[/]\n  [c]ontinue  [e]dit spec manually  [d]one\n> "
+        ).strip().lower()
+        if cmd == "c":
+            spec = auto_turn(spec)
+        elif cmd == "e":
+            manual_loop()
+            break
+        elif cmd == "d":
+            break
+        else:
+            console.print("[red]❌ Invalid command.")
+
+# add module entry point
+def main():
+    parser = argparse.ArgumentParser(
+        description="Interactive two-persona spec bootstrap"
+    )
+    parser.add_argument(
+        "--auto", action="store_true",
+        help="Run in auto mode (automatic PM⇄Architect cycles)"
+    )
+    args = parser.parse_args()
+    # Azure CLI login should happen at runtime, not import
+    azure_cli_login()
+    if args.auto:
+        auto_loop()
+    else:
+        manual_loop()
+
+if __name__ == "__main__":
+    main()
