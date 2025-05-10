@@ -36,10 +36,12 @@ from __future__ import annotations
 import os, sys, pathlib, re, subprocess
 from datetime import datetime
 from typing import List
+import json
 from dotenv import load_dotenv, find_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from unidiff import PatchSet, PatchedFile
+from unidiff.errors import UnidiffParseError
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import argparse
@@ -64,14 +66,30 @@ Azure CLI login logic moved to `azure_cli_login` function to avoid execution on 
 
 def azure_cli_login():
     """Perform Azure CLI login and set subscription based on env vars."""
+    # If already logged in, skip further Azure CLI login
+    try:
+        subprocess.run(["az", "account", "show"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        console.print("[blue]Azure CLI already logged in; skipping login[/]")
+        return
+    except subprocess.CalledProcessError:
+        pass
     tenant = os.getenv("AZURE_TENANT_ID")
     subscription = os.getenv("AZURE_SUBSCRIPTION_ID")
-    if tenant:
-        console.print(f"[blue]Logging in to Azure tenant {tenant}[/]")
-        subprocess.run(["az", "login", "--tenant", tenant], check=True)
-    if subscription:
-        console.print(f"[blue]Setting default subscription to {subscription}[/]")
-        subprocess.run(["az", "account", "set", "--subscription", subscription], check=True)
+    # Combine tenant and subscription into one login call if both provided
+    if tenant or subscription:
+        cmd = ["az", "login"]
+        msg_parts = []
+        if tenant:
+            cmd.extend(["--tenant", tenant])
+            msg_parts.append(f"tenant {tenant}")
+        if subscription:
+            # Use --subscription flag on login to set default subscription
+            cmd.extend(["--subscription", subscription])
+            msg_parts.append(f"subscription {subscription}")
+        console.print(f"[blue]Logging in to Azure {' and '.join(msg_parts)}[/]")
+        subprocess.run(cmd, check=True)
+    else:
+        console.print("[yellow]No AZURE_TENANT_ID or AZURE_SUBSCRIPTION_ID set; skipping Azure CLI login[/]")
 
 # ── Azure OpenAI client ──────────────────────────────────────────────────
 ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -109,15 +127,24 @@ SYS_ARCH_ANSWER = (
 
 SYS_PATCH = (
     "You are an expert editor. Given the architect's answer and the current spec, "
-    "output a unified git diff that updates the Markdown spec accordingly."
+    "output a unified git diff that updates the Markdown spec accordingly. "
+    "Ensure each hunk header accurately reflects the number of added/removed lines, and keep hunk sizes modest so that parsing tools can process them without errors."
 )
 
 def ask_llm(messages: List[dict]) -> str:
-    return client.chat.completions.create(
+    # Log the prompt payload before sending to LLM
+    prompt_str = json.dumps(messages, indent=2)
+    console.print(Panel(prompt_str, title="Prompt Payload", style="grey50 italic", border_style="grey70"))
+    console.rule("—")  # separator
+    # Invoke LLM
+    response = client.chat.completions.create(
         model=DEPLOYMENT,
         messages=messages,
-        max_completion_tokens=2048,
+        max_completion_tokens=16192,
     ).choices[0].message.content.strip()
+    # Log the LLM response after call
+    console.print(Panel(response, title="LLM Response", style="bright_blue italic", border_style="blue"))
+    return response
 
 # ── Diff helpers ─────────────────────────────────────────────────────────
 
@@ -147,11 +174,48 @@ def reorder_headings(md_text: str) -> str:
 
 
 def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
-    original = spec_path.read_text().splitlines(keepends=True)
-    patchset = PatchSet(diff_text.splitlines(keepends=True))
-    if not patchset:
-        console.print("[red]❌ Empty diff from LLM"); return
-    target = patchset[0]
+    """
+    Apply a unified diff to the spec file. On any parsing or patching error,
+    fall back to appending the raw diff and reordering headings.
+    """
+    try:
+        # Strip Markdown code fences to extract raw diff
+        lines = diff_text.splitlines(keepends=True)
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        clean_diff = "".join(lines)
+        original = spec_path.read_text().splitlines(keepends=True)
+        # Parse patchset
+        patchset = PatchSet(clean_diff.splitlines(keepends=True))
+        if not patchset:
+            console.print("[red]❌ Empty diff from LLM"); return
+        target = patchset[0]
+        # Direct apply
+        patched = _apply_diff(original, target)
+        if patched:
+            spec_path.write_text("".join(patched))
+            console.print("[green]✓ patch applied (direct)")
+            return
+        # Smart insert fallback
+        console.print("[yellow]Direct failed → smart insert…")
+        smart = original[:]
+        for h in target:
+            ctx = next((l.value for l in h if l.is_context), None)
+            if ctx and ctx in smart:
+                smart.insert(smart.index(ctx), *(l.value for l in h if l.is_added))
+            else:
+                break
+        else:
+            spec_path.write_text("".join(smart))
+            console.print("[green]✓ patch applied (smart)")
+            return
+        # Append & reorder fallback
+        raise RuntimeError("smart insert context missing")
+    except Exception as e:
+        console.print(f"[red]❌ Patch pipeline failed: {e}\n→ fallback: append & reorder headings")
+        marker = f"\n<!-- OUT-OF-ORDER PATCH {datetime.utcnow().isoformat()} -->\n"
+        spec_path.write_text(spec_path.read_text() + marker + diff_text)
+        spec_path.write_text(reorder_headings(spec_path.read_text()))
+        console.print("[green]✓ appended & reordered")
 
     # direct
     patched = _apply_diff(original, target)
@@ -266,8 +330,19 @@ def main():
         "--auto", action="store_true",
         help="Run in auto mode (automatic PM⇄Architect cycles)"
     )
+    parser.add_argument(
+        "--spec", "-s", type=str, default=None,
+        help="Path to the Markdown spec file to operate on"
+    )
     args = parser.parse_args()
-    # Azure CLI login should happen at runtime, not import
+    # Allow overriding SPEC_PATH via CLI
+    if args.spec:
+        global SPEC_PATH, TMP_SPEC_PATH
+        SPEC_PATH = pathlib.Path(args.spec)
+        TMP_SPEC_PATH = SPEC_PATH.with_suffix(SPEC_PATH.suffix + ".tmp")
+        # ensure directory exists
+        SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Azure CLI login should happen at runtime
     azure_cli_login()
     if args.auto:
         auto_loop()

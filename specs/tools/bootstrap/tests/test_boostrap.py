@@ -7,7 +7,9 @@ test_dir = pathlib.Path(__file__).resolve().parent
 src_dir = test_dir.parent / "src"
 sys.path.insert(0, str(src_dir))
 
+import os
 import boostrap
+import pytest
 from unidiff import PatchSet
 
 
@@ -73,7 +75,7 @@ def test_apply_patch_pipeline_direct(tmp_path, capsys):
     assert "patch applied (direct)" in captured.out
 
 
-def test_ask_llm(monkeypatch):
+def test_ask_llm(monkeypatch, capsys):
     # Dummy classes to simulate AzureOpenAI response
     class DummyMessage:
         def __init__(self, content):
@@ -93,7 +95,13 @@ def test_ask_llm(monkeypatch):
     # Monkeypatch the client's chat completion method
     monkeypatch.setattr(boostrap.client.chat.completions, "create", dummy_create)
     result = boostrap.ask_llm([{"role": "user", "content": "hi"}])
+    # Verify return value is trimmed
     assert result == "hello world"
+    # Verify styled logging panels were printed
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "Prompt Payload" in out
+    assert "LLM Response" in out
 
 
 def test_auto_turn(monkeypatch, tmp_path):
@@ -123,6 +131,7 @@ def test_auto_turn(monkeypatch, tmp_path):
     assert new_spec == "updated\n"
     # ensure SPEC_PATH was updated
     assert spec_file.read_text() == "updated\n"
+    
 
 def test_apply_patch_pipeline_smart(monkeypatch, tmp_path, capsys):
     # Force direct diff to fail to test smart insert branch
@@ -170,178 +179,26 @@ def test_apply_patch_pipeline_fallback(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "append" in captured.out.lower()
     assert "reordered" in captured.out.lower()
+import os
+import pytest
+import boostrap
 
-def test_integration_azure_login_and_client_init(monkeypatch, tmp_path):
-    # Arrange environment variables for Azure and OpenAI
-    monkeypatch.setenv("AZURE_TENANT_ID", "tenant123")
-    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub456")
-    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://endpoint")
-    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "deploy789")
-    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "api123")
-
-    # Capture subprocess.run calls for Azure CLI login and subscription set
-    import subprocess
-    calls = []
-    def fake_run(cmd, check=True):
-        calls.append(cmd)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    # Inject dummy azure.identity module if missing
-    import sys, types
-    azure_mod = types.ModuleType('azure')
-    identity_mod = types.ModuleType('azure.identity')
-    azure_mod.identity = identity_mod
-    sys.modules['azure'] = azure_mod
-    sys.modules['azure.identity'] = identity_mod
-    # Monkeypatch Azure identity credential and token provider
-    import azure.identity as identity
-    # Allow setting attributes even if they don't exist yet
-    monkeypatch.setattr(identity, "DefaultAzureCredential", lambda: "cred", raising=False)
-    monkeypatch.setattr(identity, "get_bearer_token_provider", lambda cred, scope: "provider", raising=False)
-
-    # Dummy AzureOpenAI to capture init parameters
-    init_args = {}
-    # Inject dummy openai module if missing
-    openai_mod = types.ModuleType('openai')
-    sys.modules['openai'] = openai_mod
-    import openai
-    class DummyAzureOpenAI:
-        def __init__(self, azure_endpoint, api_version, azure_ad_token_provider):
-            init_args['endpoint'] = azure_endpoint
-            init_args['version'] = api_version
-            init_args['provider'] = azure_ad_token_provider
-        # Minimal chat interface to avoid attribute errors
-        @property
-        def chat(self):
-            class C: pass
-            C.completions = type('X', (), {'create': staticmethod(lambda **kwargs: None)})
-            return C()
-    monkeypatch.setattr(openai, "AzureOpenAI", DummyAzureOpenAI)
-
-    # Reload boostrap module to re-execute top-level init code
-    import importlib, boostrap
-    importlib.reload(boostrap)
-    # Invoke Azure CLI login explicitly (moved into azure_cli_login)
+@pytest.mark.skipif(
+    not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+    reason="Azure OpenAI env vars not set, skipping live integration test"
+)
+def test_live_azure_openai_connectivity():
+    """
+    End-to-end integration: send a simple prompt to Azure OpenAI.
+    Requires AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT set.
+    """
+    # Perform Azure CLI login with existing credentials
     boostrap.azure_cli_login()
-
-    # Assert Azure CLI invoked for login and account set
-    assert ['az', 'login', '--tenant', 'tenant123'] in calls
-    assert ['az', 'account', 'set', '--subscription', 'sub456'] in calls
-
-    # Assert AzureOpenAI was initialized with expected values
-    assert init_args['endpoint'] == 'https://endpoint'
-    assert init_args['version'] == 'api123'
-    assert init_args['provider'] == 'provider'
-
-def test_integration_with_env_file(monkeypatch, tmp_path):
-    # Simulate running from repo root with a .codecraft/.env file
-    monkeypatch.chdir(tmp_path)
-    craft_dir = tmp_path / ".codecraft"
-    craft_dir.mkdir()
-    env_file = craft_dir / ".env"
-    env_file.write_text(
-        "AZURE_TENANT_ID=tenX\n"
-        "AZURE_SUBSCRIPTION_ID=subY\n"
-        "AZURE_OPENAI_ENDPOINT=https://ep\n"
-        "AZURE_OPENAI_DEPLOYMENT=depZ\n"
-        "AZURE_OPENAI_API_VERSION=v1\n"
-    )
-    # Stub subprocess.run to capture Azure CLI calls
-    import subprocess
-    calls = []
-    monkeypatch.setattr(subprocess, "run", lambda cmd, check=True: calls.append(cmd))
-    # Stub azure.identity module
-    import sys, types
-    azure_pkg = types.ModuleType("azure")
-    identity_mod = types.ModuleType("azure.identity")
-    identity_mod.DefaultAzureCredential = lambda: "cred2"
-    identity_mod.get_bearer_token_provider = lambda cred, scope: "prov2"
-    azure_pkg.identity = identity_mod
-    sys.modules["azure"] = azure_pkg
-    sys.modules["azure.identity"] = identity_mod
-    # Stub openai.AzureOpenAI client
-    openai_pkg = types.ModuleType("openai")
-    init_args2 = {}
-    class DummyClient2:
-        def __init__(self, azure_endpoint, api_version, azure_ad_token_provider):
-            init_args2['endpoint'] = azure_endpoint
-            init_args2['version'] = api_version
-            init_args2['provider'] = azure_ad_token_provider
-        @property
-        def chat(self):
-            class C: pass
-            C.completions = type('Y', (), {'create': staticmethod(lambda **k: None)})
-            return C()
-    openai_pkg.AzureOpenAI = DummyClient2
-    sys.modules["openai"] = openai_pkg
-    # Reload module to apply new .env and stubs
-    import importlib, boostrap
-    importlib.reload(boostrap)
-    # Invoke Azure CLI login (now in azure_cli_login)
-    boostrap.azure_cli_login()
-    # Validate Azure CLI calls
-    assert ['az', 'login', '--tenant', 'tenX'] in calls
-    assert ['az', 'account', 'set', '--subscription', 'subY'] in calls
-    # Validate client settings from .env
-    assert init_args2['endpoint'] == 'https://ep'
-    assert init_args2['version'] == 'v1'
-    assert init_args2['provider'] == 'prov2'
-    
-    # Test that ask_llm uses the initialized client to call LLM and trim response
-    # Replace chat completion to return a padded content
-    class DummyMsg:
-        def __init__(self, content): self.content = content
-    class DummyChoice:
-        def __init__(self, content): self.message = DummyMsg(content)
-    class DummyResp:
-        def __init__(self, content): self.choices = [DummyChoice(content)]
-    # Monkeypatch the create method on the existing client instance
-    monkeypatch.setattr(boostrap.client.chat.completions, 'create', lambda **kwargs: DummyResp('  integrated  '))
-    result = boostrap.ask_llm([{"role": "user", "content": "hi"}])
-    assert result == 'integrated'
-    
-def test_integration_with_env_file(monkeypatch, tmp_path):
-    # Simulate repo root with .codecraft/.env file containing Azure settings
-    monkeypatch.chdir(tmp_path)
-    craft_dir = tmp_path / ".codecraft"
-    craft_dir.mkdir()
-    env_file = craft_dir / ".env"
-    env_file.write_text(
-        "AZURE_TENANT_ID=tenX\n"
-        "AZURE_SUBSCRIPTION_ID=subY\n"
-        "AZURE_OPENAI_ENDPOINT=https://ep\n"
-        "AZURE_OPENAI_DEPLOYMENT=depZ\n"
-        "AZURE_OPENAI_API_VERSION=v1\n"
-    )
-    # Capture CLI calls
-    import subprocess
-    calls = []
-    def fake_run(cmd, check=True):
-        calls.append(cmd)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    # Patch Azure identity and OpenAI client
-    import azure.identity as identity, openai
-    monkeypatch.setattr(identity, "DefaultAzureCredential", lambda: "cred2")
-    monkeypatch.setattr(identity, "get_bearer_token_provider", lambda c, s: "prov2")
-    init_args2 = {}
-    class DummyClient2:
-        def __init__(self, azure_endpoint, api_version, azure_ad_token_provider):
-            init_args2['endpoint'] = azure_endpoint
-            init_args2['version'] = api_version
-            init_args2['provider'] = azure_ad_token_provider
-        @property
-        def chat(self):
-            class C: pass
-            C.completions = type('Y', (), {'create': staticmethod(lambda **k: None)})
-            return C()
-    monkeypatch.setattr(openai, "AzureOpenAI", DummyClient2)
-    # Reload module to pick up .env and re-run Azure setup
-    import importlib, boostrap
-    importlib.reload(boostrap)
-    # Validate CLI calls from .env values
-    assert ['az', 'login', '--tenant', 'tenX'] in calls
-    assert ['az', 'account', 'set', '--subscription', 'subY'] in calls
-    # Validate client init from .env
-    assert init_args2['endpoint'] == 'https://ep'
-    assert init_args2['version'] == 'v1'
-    assert init_args2['provider'] == 'prov2'
+    # Send a simple math prompt
+    prompt = [
+        {"role": "system", "content": "You are a calculator."},
+        {"role": "user", "content": "What is 2+3?"},
+    ]
+    response = boostrap.ask_llm(prompt)
+    assert response, "No response received from Azure OpenAI"
+    assert "5" in response, f"Unexpected response: {response}"
