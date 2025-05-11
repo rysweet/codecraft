@@ -539,14 +539,6 @@ def main():
         help="Number of auto mode turns to run"
     )
     parser.add_argument(
-        "--rebuild", action="store_true",
-        help="Regenerate this tool's code from its own specification and docstrings"
-    )
-    parser.add_argument(
-        "--improve", action="store_true",
-        help="Run self-improvement cycles on the bootstrap specification before rebuilding"
-    )
-    parser.add_argument(
         "--spec", "-s", type=str, default=None,
         help="Path to the Markdown spec file to operate on"
     )

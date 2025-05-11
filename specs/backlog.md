@@ -10,6 +10,17 @@
 | P3       | Multi-LLM/Agent Abstraction                | Abstract LLM client to support multiple providers and agent architectures.                                     |
 | P4       | Fine-Grained Self-Improvement Controls     | Allow targeted or scoped self-improvement (e.g., only update a helper or docstring).                          |
 | P5       | Enhanced Observability                     | Provide a dashboard or UI for reviewing self-improvement history, diffs, and LLM interactions.                 |
+
+# --- Observations from Auto-Mode Cat App Spec Generation ---
+| Priority | Feature/Improvement                        | Description                                                                                                    |
+|----------|--------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| P0       | Initial Spec Scaffolding CLI               | Provide a flag to scaffold a new spec file (title, metadata) for a fresh project before auto-cycles.           |
+| P1       | Spec Context Injection                     | Allow user to supply initial spec context or template file to guide first turn, rather than using default overview. |
+| P1.1     | Turn-by-Turn Review Mode                    | Add interactive pause and user approval after each auto turn to catch drift earlier.                            |
+| P2       | Logging to File                            | Support writing auto-cycle logs to a structured file rather than only console output for later analysis.        |
+| P3       | Retry & Backoff on LLM Errors              | Implement retry logic with exponential backoff for ask_llm calls to handle transient API failures gracefully.   |
+| P4       | Turn Reduction Based on Convergence        | Allow auto-loop to terminate early when spec changes become minimal, avoiding unnecessary turns.                 |
+| P5       | Naming & Metadata in Spec Output           | Ensure generated spec includes clear title, date, version, and unique identifiers for traceability.             |
 # Bootstrap Tool Backlog
 
 This backlog prioritizes planned features and improvements for the spec bootstrap tool, focusing on producing high-quality software specifications.
