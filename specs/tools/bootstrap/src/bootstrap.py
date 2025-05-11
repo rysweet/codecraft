@@ -46,7 +46,16 @@ from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import argparse
 
+# Initialize console
 console = Console()
+# ── Prompt loading via prompty.ai framework ─────────────────────────────
+# Separate prompt templates into files under 'prompts/' directory
+SCRIPT_DIR = pathlib.Path(__file__).parent
+PROMPT_DIR = SCRIPT_DIR / 'prompts'
+def load_prompt(name: str) -> str:
+    """Load prompt template from prompts/<name>.txt"""
+    path = PROMPT_DIR / f"{name}.txt"
+    return path.read_text().strip()
 
 # ── .env loading ─────────────────────────────────────────────────────────
 ROOT = pathlib.Path.cwd()
@@ -112,24 +121,10 @@ SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
 if not SPEC_PATH.exists():
     SPEC_PATH.write_text("# Rough Sketch\n\n_TODO: describe your idea here._\n")
 
-# ── System prompts ───────────────────────────────────────────────────────
-SYS_PM_ASK = (
-    "You are a senior PM AI interviewing an expert architect. From the current "
-    "Markdown spec, ask **one** clarifying question that will move the spec closer "
-    "to a shippable overview."
-)
-
-SYS_ARCH_ANSWER = (
-    "You are an expert software architect. Answer the PM's question with clear, concise "
-    "guidance—well‑specified, elegant, compact. If you feel unsure, prefix your answer "
-    "with 'SEARCH:' followed by a query you would run. Keep creativity reasonable."
-)
-
-SYS_PATCH = (
-    "You are an expert editor. Given the architect's answer and the current spec, "
-    "output a unified git diff that updates the Markdown spec accordingly. "
-    "Ensure each hunk header accurately reflects the number of added/removed lines, and keep hunk sizes modest so that parsing tools can process them without errors."
-)
+## ── System prompts loaded from files via prompty.ai ──────────────────────
+SYS_PM_ASK      = load_prompt('pm_ask')      # senior PM clarifying question prompt
+SYS_ARCH_ANSWER = load_prompt('arch_answer') # architect answer prompt
+SYS_PATCH      = load_prompt('sys_patch')    # editor patch creation prompt
 
 def ask_llm(messages: List[dict]) -> str:
     # Log the prompt payload before sending to LLM
@@ -201,7 +196,10 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         for h in target:
             ctx = next((l.value for l in h if l.is_context), None)
             if ctx and ctx in smart:
-                smart.insert(smart.index(ctx), *(l.value for l in h if l.is_added))
+                added = [l.value for l in h if l.is_added]
+                pos = smart.index(ctx)
+                for offset, line in enumerate(added):
+                    smart.insert(pos + offset, line)
             else:
                 break
         else:
@@ -216,38 +214,12 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         spec_path.write_text(spec_path.read_text() + marker + diff_text)
         spec_path.write_text(reorder_headings(spec_path.read_text()))
         console.print("[green]✓ appended & reordered")
+        return  # exit after fallback
 
-    # direct
-    patched = _apply_diff(original, target)
-    if patched:
-        spec_path.write_text("".join(patched))
-        console.print("[green]✓ patch applied (direct)")
-        return
-
-    # smart insert
-    console.print("[yellow]Direct failed → smart insert…")
-    smart = original[:]
-    for h in target:
-        ctx = next((l.value for l in h if l.is_context), None)
-        if ctx and ctx in smart:
-            smart.insert(smart.index(ctx), *(l.value for l in h if l.is_added))
-        else:
-            break
-    else:
-        spec_path.write_text("".join(smart))
-        console.print("[green]✓ patch applied (smart)")
-        return
-
-    # append fallback + reorder
-    console.print("[red]Smart insert failed → append & reorder headings")
-    marker = f"\n<!-- OUT-OF-ORDER PATCH {datetime.utcnow().isoformat()} -->\n"
-    spec_path.write_text(spec_path.read_text() + marker + diff_text)
-    spec_path.write_text(reorder_headings(spec_path.read_text()))
-    console.print("[green]✓ appended & reordered")
 
 # ── Auto dialog helpers ──────────────────────────────────────────────────
 
-def auto_turn(spec_text: str) -> str:
+def auto_turn(spec_text: str, step: int) -> str:
     """Run one interviewer→architect→patch cycle and return new spec text."""
     question = ask_llm([
         {"role": "system", "content": SYS_PM_ASK},
@@ -257,13 +229,13 @@ def auto_turn(spec_text: str) -> str:
         {"role": "system", "content": SYS_ARCH_ANSWER},
         {"role": "user", "content": question},
     ])
-    console.print(Panel(question, title="PM Question", style="cyan"))
-    console.print(Panel(answer, title="Architect Answer", style="green"))
+    console.print(Panel(question, title="PM Question", style="cyan", subtitle=f"Step {step}", subtitle_align="center"))
+    console.print(Panel(answer, title="Architect Answer", style="green", subtitle=f"Step {step}", subtitle_align="center"))
     diff = ask_llm([
         {"role": "system", "content": SYS_PATCH},
         {"role": "user", "content": f"SPEC:\n{spec_text}\nANSWER:\n{answer}"},
     ])
-    console.print(Panel(diff, title="Patch", style="magenta"))
+    console.print(Panel(diff, title="Patch", style="magenta", subtitle=f"Step {step}", subtitle_align="center"))
     apply_patch_pipeline(SPEC_PATH, diff)
     return SPEC_PATH.read_text()
 
@@ -302,17 +274,23 @@ def manual_loop():
         spec = TMP_SPEC_PATH.read_text()
 
 
-def auto_loop():
+def auto_loop(turns: int):
+    """Run automatic PM⇄Architect cycles for the given number of turns with step tracking."""
     spec = SPEC_PATH.read_text()
-    for _ in range(AUTO_TURNS):
-        spec = auto_turn(spec)
+    step = 1
+    # initial auto turns
+    for _ in range(turns):
+        spec = auto_turn(spec, step)
+        step += 1
+    # post-turn interactive continue
     while True:
         cmd = console.input(
             "[bold cyan]Auto mode done. Edit spec manually, or choose an action:  "
             "[/]\n  [c]ontinue  [e]dit spec manually  [d]one\n> "
         ).strip().lower()
         if cmd == "c":
-            spec = auto_turn(spec)
+            spec = auto_turn(spec, step)
+            step += 1
         elif cmd == "e":
             manual_loop()
             break
@@ -331,6 +309,10 @@ def main():
         help="Run in auto mode (automatic PM⇄Architect cycles)"
     )
     parser.add_argument(
+        "--turns", "-t", type=int, default=None,
+        help="Number of auto mode turns to run (overrides AUTO_TURNS env var)"
+    )
+    parser.add_argument(
         "--spec", "-s", type=str, default=None,
         help="Path to the Markdown spec file to operate on"
     )
@@ -345,7 +327,9 @@ def main():
     # Azure CLI login should happen at runtime
     azure_cli_login()
     if args.auto:
-        auto_loop()
+        # Determine number of turns: CLI overrides env var
+        turns = args.turns if args.turns is not None else AUTO_TURNS
+        auto_loop(turns)
     else:
         manual_loop()
 
