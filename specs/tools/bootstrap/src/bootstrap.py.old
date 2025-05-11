@@ -1,68 +1,3 @@
-# --- Self-rebuild and self-improve helpers ---
-def rebuild_from_spec():
-    """Regenerate this script from its own specification and docstrings."""
-    # Read the spec (top-level docstring)
-    spec_text = SPEC_PATH.read_text()
-    # Compose prompt for LLM
-    prompt = [
-        {"role": "system", "content": SYS_REBUILD},
-        {"role": "user", "content": spec_text},
-    ]
-    new_code = ask_llm(prompt)
-    # Overwrite this file with new code
-    script_path = pathlib.Path(__file__)
-    script_path.write_text(new_code)
-    console.print(f"[green]✓ bootstrap.py regenerated from spec and docstrings[/]")
-
-def improve_tool(turns: int = 4):
-    """Run self-improvement cycles on the bootstrap specification, then rebuild and test after each turn."""
-    spec = SPEC_PATH.read_text()
-    for step in range(1, turns + 1):
-        spec = auto_turn(spec, step)
-        SPEC_PATH.write_text(spec)
-        console.print(f"[blue]✓ Self-improvement turn {step} complete[/]")
-        rebuild_from_spec()
-        # Run tests after each rebuild
-        subprocess.run([sys.executable, "-m", "pytest", "specs/tools/bootstrap/tests/", "--maxfail=1", "--disable-warnings", "-v"], check=False)
-#!/usr/bin/env python
-## (already present at top, remove duplicate)
-"""
-bootstrap_spec_dialog.py (v0.7)
---------------------------------
-A Spec-First Two-Persona Dialog Tool for Refining Markdown Specifications
-
-This script accelerates the creation and refinement of software specs by orchestrating a structured
-conversation between two roles:
-  • PM-Interviewer: probes the current spec with focused questions.
-  • Architect-Responder: provides concise, well-defined technical guidance.
-
-Features:
-  - Manual Mode (default): one-turn PM question followed by your architect answer and automated patch.
-  - Auto Mode (`--auto`): runs configurable cycles of PM⇄Architect exchanges and applies diffs.
-  - Prompt Management: all system prompts live in `src/prompts/` via prompty.ai for easy customization.
-  - Patch Pipeline: attempts direct diff apply, context-smart insert, and a pending-updates fallback.
-  - Azure OpenAI Integration: uses `AzureOpenAI` client with DefaultAzureCredential for token-based auth.
-  - Local-First Workflow: edits local Markdown spec files, supports safe rollbacks and manual overrides.
-  - Self-Rebuild (`--rebuild`): regenerate bootstrap.py from its own specification and docstrings.
-  - Self-Improve (`--improve`): run iterative self-improvement cycles refining specification and code.
-
-Backlog Goals:
-  1. Evolve specs through dialogue-driven refinement.
-  2. Ensure reliable patching with robust failure recovery.
-  3. Keep prompts and logic modular for future extensions.
-  4. Provide transparent audit trails of spec changes.
-
-Environment Variables:
-  - AZURE_OPENAI_ENDPOINT
-  - AZURE_OPENAI_DEPLOYMENT
-  - AZURE_OPENAI_API_VERSION
-
-CLI Flags:
-  - --auto                 Run automatic PM⇄Architect cycles
-  - --turns <n> (default 4) Number of auto mode turns
-  - --rebuild              Regenerate this tool's code from its spec and docstrings
-  - --improve              Run self-improvement cycles on the bootstrap specification
-"""
 __all__ = [
     "rebuild_from_spec",
     "improve_tool",
@@ -77,6 +12,7 @@ __all__ = [
     "azure_cli_login",
     "main",
 ]
+#!/usr/bin/env python
 """
 bootstrap_spec_dialog.py (v0.7)
 --------------------------------
@@ -114,7 +50,7 @@ CLI Flags:
   - --rebuild              Regenerate this tool's code from its spec and docstrings
   - --improve              Run self-improvement cycles on the bootstrap specification
 """
-
+from __future__ import annotations
 import os, sys, pathlib, re, subprocess
 from datetime import datetime
 from typing import List

@@ -1,0 +1,1 @@
+You are an expert code generator. Given the specification in the top-level docstring and the function signatures and docstrings in bootstrap.py, generate the complete updated code for bootstrap.py. Only output the code file content without additional explanation.
