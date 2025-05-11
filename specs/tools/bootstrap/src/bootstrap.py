@@ -49,7 +49,18 @@ def improve_tool(turns: int = 4):
         SPEC_PATH.write_text(spec)
         console.print(f"[blue]✓ Self-improvement turn {step} complete[/]")
         rebuild_from_spec()
-        # Optionally, run tests on the new file (not implemented here)
+        # Run tests after each turn
+        try:
+            import subprocess
+            result = subprocess.run([
+                sys.executable, '-m', 'pytest', '--maxfail=1', '--disable-warnings', '-v'
+            ], cwd=pathlib.Path(__file__).parent.parent, capture_output=True, text=True)
+            if result.returncode == 0:
+                console.print("[green]✓ All tests passed after self-improvement turn[/]")
+            else:
+                console.print(f"[red]❌ Tests failed after self-improvement turn {step}[/]\n{result.stdout}\n{result.stderr}")
+        except Exception as e:
+            console.print(f"[red]❌ Error running tests after self-improvement turn {step}: {e}")
 #!/usr/bin/env python
 ## (already present at top, remove duplicate)
 """
