@@ -1,3 +1,15 @@
+# --- Criticisms & Improvements: Self-Rebuild/Self-Improve ---
+| Priority | Feature/Improvement                        | Description                                                                                                    |
+|----------|--------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| P0       | Human-in-the-Loop for Self-Edits           | Require user review/approval before overwriting tool code with LLM-generated output.                           |
+| P0.1     | Git-Based Versioning & Rollback            | Commit each self-edit to a git branch and allow easy rollback to previous versions.                            |
+| P0.2     | Static Analysis & Linting in Self-Improve  | Add linting, type-checking, and static analysis to the self-improvement pipeline.                              |
+| P0.3     | Persistent Audit Trail                     | Log all LLM prompts, responses, and diffs to a persistent file for traceability and debugging.                 |
+| P1       | Dry-Run & Diff Preview for Self-Rebuild    | Show a diff and require confirmation before applying LLM-generated code changes.                               |
+| P2       | Prompt/Spec Synchronization Check          | Detect and surface drift between prompts/spec and actual code; require review of prompt changes.               |
+| P3       | Multi-LLM/Agent Abstraction                | Abstract LLM client to support multiple providers and agent architectures.                                     |
+| P4       | Fine-Grained Self-Improvement Controls     | Allow targeted or scoped self-improvement (e.g., only update a helper or docstring).                          |
+| P5       | Enhanced Observability                     | Provide a dashboard or UI for reviewing self-improvement history, diffs, and LLM interactions.                 |
 # Bootstrap Tool Backlog
 
 This backlog prioritizes planned features and improvements for the spec bootstrap tool, focusing on producing high-quality software specifications.
