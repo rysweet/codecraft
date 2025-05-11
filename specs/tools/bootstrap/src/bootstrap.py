@@ -351,33 +351,37 @@ def apply_semantic_patch(spec_path: pathlib.Path, diff_text: str) -> bool:
     
 def apply_diff_direct(spec_path: pathlib.Path, diff_text: str) -> bool:
     """Attempt direct and smart insert without fallback; return True if applied."""
-    # Strip fences
-    lines = diff_text.splitlines(keepends=True)
-    lines = [l for l in lines if not l.strip().startswith('```')]
-    clean_diff = ''.join(lines)
-    original = spec_path.read_text().splitlines(keepends=True)
-    patchset = PatchSet(clean_diff.splitlines(keepends=True))
-    if not patchset:
-        return False
-    target = patchset[0]
-    # direct
-    patched = _apply_diff(original, target)
-    if patched:
-        spec_path.write_text(''.join(patched))
-        return True
-    # smart insert
-    smart = original[:]
-    for h in target:
-        ctx = next((l.value for l in h if l.is_context), None)
-        if ctx and ctx in smart:
-            added = [l.value for l in h if l.is_added]
-            pos = smart.index(ctx)
-            for offset, line in enumerate(added):
-                smart.insert(pos + offset, line)
-        else:
+    try:
+        # Strip Markdown fences
+        lines = diff_text.splitlines(keepends=True)
+        lines = [l for l in lines if not l.strip().startswith('```')]
+        clean_diff = ''.join(lines)
+        original = spec_path.read_text().splitlines(keepends=True)
+        patchset = PatchSet(clean_diff.splitlines(keepends=True))
+        if not patchset:
             return False
-    spec_path.write_text(''.join(smart))
-    return True
+        target = patchset[0]
+        # direct
+        patched = _apply_diff(original, target)
+        if patched:
+            spec_path.write_text(''.join(patched))
+            return True
+        # smart insert
+        smart = original[:]
+        for h in target:
+            ctx = next((l.value for l in h if l.is_context), None)
+            if ctx and ctx in smart:
+                added = [l.value for l in h if l.is_added]
+                pos = smart.index(ctx)
+                for offset, line in enumerate(added):
+                    smart.insert(pos + offset, line)
+            else:
+                return False
+        spec_path.write_text(''.join(smart))
+        return True
+    except Exception:
+        # parse or apply error
+        return False
 
 
 def reorder_headings(md_text: str) -> str:
@@ -459,12 +463,16 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         ])
         console.print(Panel(pending_diff, title="Pending Patch", style="yellow"))
         # Attempt direct apply of pending patch
-        if apply_diff_direct(spec_path, pending_diff):
-            console.print("[green]✓ pending updates applied")
-            patch_result["result"] = "pending_applied"
-        else:
-            console.print("[red]❌ pending updates failed")
-            patch_result["result"] = "pending_failed"
+        try:
+            if apply_diff_direct(spec_path, pending_diff):
+                console.print("[green]✓ pending updates applied")
+                patch_result["result"] = "pending_applied"
+            else:
+                console.print("[red]❌ pending updates failed")
+                patch_result["result"] = "pending_failed"
+        except Exception as e:
+            console.print(f"[red]❌ pending updates error: {e}")
+            patch_result["result"] = f"pending_error: {e}"
         return
     finally:
         if hasattr(apply_patch_pipeline, "logger") and apply_patch_pipeline.logger:
