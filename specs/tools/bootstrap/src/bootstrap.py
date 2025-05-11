@@ -153,6 +153,8 @@ from unidiff.errors import UnidiffParseError
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import argparse
+# --- Logging utility ---
+from log_utils import AuditLogger
 
 # Initialize console
 console = Console()
@@ -249,6 +251,13 @@ def ask_llm(messages: List[dict]) -> str:
     ).choices[0].message.content.strip()
     # Log the LLM response after call
     console.print(Panel(response, title="LLM Response", style="bright_blue italic", border_style="blue"))
+    # Audit log
+    if hasattr(ask_llm, "logger") and ask_llm.logger:
+        ask_llm.logger.log({
+            "event": "llm_call",
+            "prompt": messages,
+            "response": response
+        })
     return response
 
 # ── Diff helpers ─────────────────────────────────────────────────────────
@@ -372,7 +381,9 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
     """
     Apply a unified diff to the spec file. On any parsing or patching error,
     fall back to appending the raw diff and reordering headings.
+    Logs all patch attempts and results.
     """
+    patch_result = {"event": "patch_attempt", "diff": diff_text}
     try:
         # Strip Markdown code fences to extract raw diff
         lines = diff_text.splitlines(keepends=True)
@@ -382,13 +393,15 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         # Parse patchset
         patchset = PatchSet(clean_diff.splitlines(keepends=True))
         if not patchset:
-            console.print("[red]❌ Empty diff from LLM"); return
+            console.print("[red]❌ Empty diff from LLM");
+            patch_result["result"] = "empty_diff"; raise RuntimeError("empty diff")
         target = patchset[0]
         # Direct apply
         patched = _apply_diff(original, target)
         if patched:
             spec_path.write_text("".join(patched))
             console.print("[green]✓ patch applied (direct)")
+            patch_result["result"] = "direct"
             return
         # Smart insert fallback
         console.print("[yellow]Direct failed → smart insert…")
@@ -405,15 +418,18 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         else:
             spec_path.write_text("".join(smart))
             console.print("[green]✓ patch applied (smart)")
+            patch_result["result"] = "smart"
             return
         # Semantic AST-based patch fallback (P0)
         if apply_semantic_patch(spec_path, diff_text):
             console.print("[green]✓ patch applied (semantic)")
+            patch_result["result"] = "semantic"
             return
         # Append & reorder fallback
         raise RuntimeError("smart insert context missing")
     except Exception as e:
         console.print(f"[red]❌ Patch pipeline failed: {e}\n→ fallback: pending updates")
+        patch_result["result"] = f"failed: {e}"
         # Append Pending Updates section with table
         orig = spec_path.read_text()
         pending = (
@@ -434,9 +450,14 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
         # Attempt direct apply of pending patch
         if apply_diff_direct(spec_path, pending_diff):
             console.print("[green]✓ pending updates applied")
+            patch_result["result"] = "pending_applied"
         else:
             console.print("[red]❌ pending updates failed")
+            patch_result["result"] = "pending_failed"
         return
+    finally:
+        if hasattr(apply_patch_pipeline, "logger") and apply_patch_pipeline.logger:
+            apply_patch_pipeline.logger.log(patch_result)
 
 
 # ── Auto dialog helpers ──────────────────────────────────────────────────
@@ -556,6 +577,10 @@ def main():
         SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Azure CLI login should happen at runtime
     azure_cli_login()
+    # Set up audit logger and inject into LLM/patch pipeline
+    logger = AuditLogger()
+    ask_llm.logger = logger
+    apply_patch_pipeline.logger = logger
     # Self-improve or rebuild workflow
     if args.rebuild:
         rebuild_from_spec()
@@ -568,6 +593,8 @@ def main():
         auto_loop(args.turns)
     else:
         manual_loop()
+
+    logger.close()
 
 if __name__ == "__main__":
     main()
