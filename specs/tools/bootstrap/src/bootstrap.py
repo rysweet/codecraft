@@ -17,25 +17,29 @@ def rebuild_from_spec():
     repo_root = script_path.parent.parent.parent.parent  # /codecraft
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     branch_name = f"selfedit/{ts}"
-    # Create new branch from current HEAD
-    subprocess.run(["git", "checkout", "-b", branch_name], cwd=repo_root, check=True)
     # Write the new code to the same file path (in the new branch only)
     script_path.write_text(new_code)
-    subprocess.run(["git", "add", str(script_path.relative_to(repo_root))], cwd=repo_root, check=True)
-    subprocess.run(["git", "commit", "-m", f"Self-edit: regenerate bootstrap.py from spec at {ts}"], cwd=repo_root, check=True)
-    # Push the branch to origin
-    subprocess.run(["git", "push", "-u", "origin", branch_name], cwd=repo_root, check=True)
-    # Create a pull request using GitHub CLI (gh)
-    pr_title = f"Self-edit: bootstrap.py regenerated from spec at {ts}"
-    pr_body = "Automated self-edit by CodeCraft bootstrap tool. Please review before merging."
-    subprocess.run([
-        "gh", "pr", "create",
-        "--title", pr_title,
-        "--body", pr_body,
-        "--base", "main",
-        "--head", branch_name
-    ], cwd=repo_root, check=True)
-    console.print(f"[green]✓ bootstrap.py self-edit committed and PR opened from branch {branch_name}[/]")
+    # Attempt git operations in a new branch; on failure, warn and continue
+    try:
+        # Create new branch from current HEAD
+        subprocess.run(["git", "checkout", "-b", branch_name], cwd=repo_root, check=True)
+        subprocess.run(["git", "add", str(script_path.relative_to(repo_root))], cwd=repo_root, check=True)
+        subprocess.run(["git", "commit", "-m", f"Self-edit: regenerate bootstrap.py from spec at {ts}"], cwd=repo_root, check=True)
+        # Push the branch to origin
+        subprocess.run(["git", "push", "-u", "origin", branch_name], cwd=repo_root, check=True)
+        # Create a pull request using GitHub CLI (gh)
+        pr_title = f"Self-edit: bootstrap.py regenerated from spec at {ts}"
+        pr_body = "Automated self-edit by CodeCraft bootstrap tool. Please review before merging."
+        subprocess.run([
+            "gh", "pr", "create",
+            "--title", pr_title,
+            "--body", pr_body,
+            "--base", "main",
+            "--head", branch_name
+        ], cwd=repo_root, check=True)
+        console.print(f"[green]✓ bootstrap.py self-edit committed and PR opened from branch {branch_name}[/]")
+    except Exception as e:
+        console.print(f"[yellow]Warning: self-edit git operations failed: {e}[/]")
 
 def improve_tool(turns: int = 4):
     """Run self-improvement cycles on the bootstrap specification, then rebuild and test after each turn."""
