@@ -130,9 +130,9 @@ Conversation data: verbatim turns are transient; every *N* turns a `Conversation
 
 # 8 · Stages & Deliverables
 
-| Stage | Name              | Deliverables                                                                                                  | Owner        |
+| Stage | Name              | Deliverables                                                                                                  | Responsible        |
 | ----- | ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------ |
-| S1    | Rough Sketch      | `sketch.md`                                                                                                   | Stakeholder  |
+| S1    | Rough Sketch      | `sketch.md`                                                                                                   | CodeCraft User  |
 | S2    | **This overview** | `00_overview.md`                                                                                              | PMA          |
 | S3    | Refinement Loop   | PR patches                                                                                                    | PMA          |
 | S4    | Component Specs   | `01_agents`, `02_orchestrator`, `03_graph_service`, `04_vscode_extension`, `05_llm_gateway`, `06_dialog_mode` | PMA          |

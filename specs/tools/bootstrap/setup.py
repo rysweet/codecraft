@@ -14,7 +14,9 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "bootstrap-spec=boostrap:main",
+            "bootstrap-spec=bootstrap:main",
         ],
     },
+    # Include wrapper script for easy invocation without changing directories
+    scripts=["bootstrap.py"],
 )

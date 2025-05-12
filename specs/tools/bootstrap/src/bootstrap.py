@@ -161,11 +161,38 @@ from rich.console import Console
 from rich.panel import Panel
 from unidiff import PatchSet, PatchedFile
 from unidiff.errors import UnidiffParseError
+# Optional AST diff integration (requires `unified_diff_to_ast`)
+try:
+    from unified_diff_to_ast import unified_diff_to_ast
+except ImportError:
+    unified_diff_to_ast = None
+try:
+    # Full-blown AST diff integration (optional dependency)
+    from unified_diff_to_ast import unified_diff_to_ast
+except ImportError:
+    unified_diff_to_ast = None
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+# Import patching utilities as a standalone module
+from patching.patcher import (
+    _apply_diff,
+    apply_diff_direct,
+    apply_semantic_patch,
+    reorder_headings,
+    apply_patch_pipeline,
+)
 import argparse
 # --- Logging utility ---
+# --- Logging utility ---
 from log_utils import AuditLogger
+  
+# --- Patching overrides: delegate diff/patch functions to standalone module ---
+import patching.patcher as _p
+_apply_diff = _p._apply_diff
+apply_diff_direct = _p.apply_diff_direct
+apply_semantic_patch = _p.apply_semantic_patch
+reorder_headings = _p.reorder_headings
+apply_patch_pipeline = _p.apply_patch_pipeline
 
 # Initialize console
 console = Console()
@@ -435,6 +462,19 @@ def apply_patch_pipeline(spec_path: pathlib.Path, diff_text: str) -> None:
             console.print("[green]✓ patch applied (smart)")
             patch_result["result"] = "smart"
             return
+        # Full AST-driven patch fallback (P0.2)
+        if unified_diff_to_ast:
+            console.print("[yellow]Attempting AST-driven patch…")
+            try:
+                # Parse unified diff to AST patch and apply
+                patch_ast = unified_diff_to_ast(diff_text)
+                new_md = patch_ast.apply(spec_path.read_text())
+                spec_path.write_text(new_md)
+                console.print("[green]✓ patch applied (ast)")
+                patch_result["result"] = "ast"
+                return
+            except Exception as e:
+                console.print(f"[red]AST patch error: {e}")
         # Semantic AST-based patch fallback (P0)
         if apply_semantic_patch(spec_path, diff_text):
             console.print("[green]✓ patch applied (semantic)")
@@ -586,7 +626,22 @@ def main():
         "--spec", "-s", type=str, default=None,
         help="Path to the Markdown spec file to operate on"
     )
+    parser.add_argument(
+        "--emit-spec", action="store_true",
+        help="Extract the module docstring spec to its own markdown file and exit"
+    )
     args = parser.parse_args()
+    # Handle emit-spec: dump top-level docstring spec
+    if args.emit_spec:
+        import inspect
+        # Get module docstring
+        doc = inspect.getdoc(sys.modules[__name__]) or ""
+        # Write to specs/bootstrap_tool_spec.md
+        out_path = pathlib.Path(__file__).parent / "specs" / "bootstrap_tool_spec.md"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(doc)
+        console.print(f"[green]✓ Spec extracted to {out_path}")
+        return
     # Allow overriding SPEC_PATH via CLI
     if args.spec:
         global SPEC_PATH, TMP_SPEC_PATH

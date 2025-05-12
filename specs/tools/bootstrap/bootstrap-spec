@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""
+Project-level launcher for the bootstrap tool.
+Usage: ./bootstrap-spec [--auto] [--emit-spec] [etc]
+"""
+import sys
+import pathlib
+
+# Locate the tool's src directory based on this script location
+current_dir = pathlib.Path(__file__).parent.resolve()
+tool_src = current_dir / "src"
+if not tool_src.exists():
+    sys.exit(f"Error: couldn't find bootstrap src at {tool_src}")
+# Add to path
+sys.path.insert(0, str(tool_src))
+
+# Run
+try:
+    from bootstrap import main
+except ImportError as e:
+    sys.exit(f"Error importing bootstrap: {e}")
+
+if __name__ == '__main__':
+    main()
