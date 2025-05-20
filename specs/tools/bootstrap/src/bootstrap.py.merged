@@ -1,0 +1,65 @@
+import os, sys, pathlib, re, subprocess
+from datetime import datetime
+from typing import List
+import json
+from dotenv import load_dotenv, find_dotenv
+from rich.console import Console
+from rich.panel import Panel
+from unidiff import PatchSet, PatchedFile
+from unidiff.errors import UnidiffParseError
+from openai import AzureOpenAI
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+import argparse
+from __future__ import annotations
+#!/usr/bin/env python
+"""
+bootstrap_spec_dialog.py (v0.7)
+--------------------------------
+A Spec-First Two-Persona Dialog Tool for Refining Markdown Specifications
+
+This script accelerates the creation and refinement of software specs by orchestrating a structured
+conversation between two roles:
+  • PM-Interviewer: probes the current spec with focused questions.
+  • Architect-Responder: provides concise, well-defined technical guidance.
+
+Features:
+  - Manual Mode (default): one-turn PM question followed by your architect answer and automated patch.
+  - Auto Mode (`--auto`): runs configurable cycles of PM⇄Architect exchanges and applies diffs.
+  - Prompt Management: all system prompts live in `src/prompts/` via prompty.ai for easy customization.
+  - Patch Pipeline: attempts direct diff apply, context-smart insert, and a pending-updates fallback.
+  - Azure OpenAI Integration: uses `AzureOpenAI` client with DefaultAzureCredential for token-based auth.
+  - Local-First Workflow: edits local Markdown spec files, supports safe rollbacks and manual overrides.
+  - Self-Rebuild (`--rebuild`): regenerate bootstrap.py from its own specification and docstrings.
+  - Self-Improve (`--improve`): run iterative self-improvement cycles refining specification and code.
+
+Backlog Goals:
+  1. Evolve specs through dialogue-driven refinement.
+  2. Ensure reliable patching with robust failure recovery.
+  3. Keep prompts and logic modular for future extensions.
+  4. Provide transparent audit trails of spec changes.
+
+Environment Variables:
+  - AZURE_OPENAI_ENDPOINT
+  - AZURE_OPENAI_DEPLOYMENT
+  - AZURE_OPENAI_API_VERSION
+
+CLI Flags:
+  - --auto                 Run automatic PM⇄Architect cycles
+  - --turns <n> (default 4) Number of auto mode turns
+  - --rebuild              Regenerate this tool's code from its spec and docstrings
+  - --improve              Run self-improvement cycles on the bootstrap specification
+"""
+__all__ = [
+    "rebuild_from_spec",
+    "improve_tool",
+    "apply_patch_pipeline",
+    "auto_turn",
+    "manual_loop",
+    "ask_llm",
+    "apply_diff_direct",
+    "apply_semantic_patch",
+    "_apply_diff",
+    "reorder_headings",
+    "azure_cli_login",
+    "main",
+]

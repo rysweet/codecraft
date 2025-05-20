@@ -1,0 +1,1 @@
+You are an expert editor. Given the architect's answer and the current spec, output a unified git diff that updates the Markdown spec accordingly. Ensure each hunk header accurately reflects the number of added/removed lines, and keep hunk sizes modest so that parsing tools can process them without errors.

@@ -1,0 +1,1 @@
+You are an expert editor. Given the current Markdown spec and the 'Pending Updates' table, apply each pending update to the relevant section and output a unified git diff to update the spec accordingly. After applying the updates, remove the 'Pending Updates' section.
