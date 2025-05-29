@@ -1,135 +1,148 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 bootstrap.py
 
-Rough Sketch:
-The main challenges revolve around:
-  • Eliminating inefficient back-and-forth: 
-    Users need a streamlined way to gather inputs quickly, 
-    without manual data-siloed tasks.
-  • Reducing cognitive load: 
-    The design should minimize complex workflows or guesswork 
-    that bog down users or confuse stakeholders.
-  • Providing immediate insights: 
-    There’s a gap in timely, context-rich feedback.
+This module provides a streamlined, event-driven intake flow that captures and centralizes
+all relevant user data into a single source of truth. It exposes functions to initialize
+the system, handle dynamic input gathering, manage events, and offer immediate feedback
+loops. The design aims to:
 
-This module addresses these challenges by offering functions to:
-  1. Initialize a configurable environment.
-  2. Gather and consolidate user inputs seamlessly.
-  3. Reduce cognitive overhead through efficient data processing.
-  4. Provide immediate, context-rich insights to stakeholders.
+• Eliminate inefficient back-and-forth: Provide a single progressive-intake flow that
+  captures each relevant data piece once.
+
+• Reduce cognitive load: Dynamically present only necessary fields and offer real-time
+  contextual nudges to guide users and stakeholders.
+
+• Implement an event-driven architecture: Publish all meaningful user actions as events;
+  downstream services subscribe and react in near-real time, ensuring context-rich insights
+  are immediately available for continued user interaction.
+
+• Maintain a single source of truth store: Continuously enrich a centralized data record,
+  ensuring updates are instantly reflected without redundant data entries.
+
+• Provide transparent feedback loops: Present adaptive summaries or previews inline so that
+  users can see how newly provided information impacts their overall flow without losing focus.
 """
 
+import uuid
+from typing import Any, Callable, Dict, List, Optional
 
-def initialize_app(config: dict) -> None:
+# Global store simulating the single source of truth
+_SINGLE_SOURCE_OF_TRUTH: Dict[str, Any] = {}
+
+# In-memory structure to hold event subscriptions:
+# event_name -> list of callables
+_EVENT_SUBSCRIBERS: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
+
+
+def init_app(config: Dict[str, Any]) -> None:
     """
-    Initialize the application environment with the given configuration.
+    Initialize the application with the given configuration.
+
+    This sets up any required global structures, attaches them to the single
+    source of truth, and prepares the system for dynamic data capture and
+    event-driven operations.
 
     Args:
-        config (dict): A dictionary containing configuration options.
+        config: A dictionary containing any application-wide settings required
+                for initialization.
     """
-    # Example: Setup environment variables, logging, or any necessary
-    # application context based on the provided config.
-    # This function does not return anything; it just ensures that
-    # the environment is ready for subsequent operations.
-    for key, value in config.items():
-        print(f"Initializing {key} with value: {value}")
+    _SINGLE_SOURCE_OF_TRUTH.update(config)
+    _setup_event_system()
+    _publish_event("app_initialized", {"message": "Application initialized", "config": config})
 
 
-def gather_user_inputs(sources: list) -> dict:
+def unify_input_flow(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Gather user inputs from various sources to create a consolidated dictionary.
+    Combine newly provided inputs into the single source of truth while presenting
+    only fields strictly necessary for the current context. Optionally trigger
+    feedback events if the new inputs enrich or alter existing data.
 
     Args:
-        sources (list): A list of callable input sources or data references.
+        inputs: A dictionary representing user-provided data at a given step
+                of the intake flow.
 
     Returns:
-        dict: A dictionary of consolidated user inputs.
+        A dictionary reflecting the current state of the single source of truth
+        after merging in new information.
     """
-    consolidated_data = {}
-    for source in sources:
-        # Each source could be a function or data reference
-        # that returns key-value pairs to integrate into consolidated_data
-        if callable(source):
-            # If source is a function, call it and update the dictionary
-            data_piece = source()
-            if isinstance(data_piece, dict):
-                consolidated_data.update(data_piece)
-        elif isinstance(source, dict):
-            # If source is already a dictionary, integrate it directly
-            consolidated_data.update(source)
-        else:
-            # Otherwise, handle as needed (e.g., strings, files, etc.)
-            consolidated_data[str(source)] = source
-    return consolidated_data
+    merged_data = {}
+    for key, value in inputs.items():
+        # If new input is relevant or modifies existing data, handle accordingly
+        if _SINGLE_SOURCE_OF_TRUTH.get(key) != value:
+            _SINGLE_SOURCE_OF_TRUTH[key] = value
+            merged_data[key] = value
+
+    if merged_data:
+        # If there's any meaningful update, publish an event
+        _publish_event("input_updated", {"updated_fields": merged_data})
+
+    return dict(_SINGLE_SOURCE_OF_TRUTH)
 
 
-def reduce_cognitive_load(data: dict) -> dict:
+def handle_event(event_type: str, data: Dict[str, Any]) -> None:
     """
-    Process the data to reduce complexity and highlight important information.
+    Publish a high-level user or system event with the given type and data.
+    This function notifies all subscribers listening for this event type,
+    providing them near-real-time context about user actions.
 
     Args:
-        data (dict): The dictionary of user inputs or data to be processed.
-
-    Returns:
-        dict: A dictionary with structured, simplified data.
+        event_type: The string identifier representing the event category.
+        data: A dictionary of contextual information describing the event.
     """
-    # This could involve filtering out unnecessary items, reformatting them,
-    # or otherwise simplifying the content to make it more digestible.
-    processed_data = {}
-    for key, value in data.items():
-        if value not in (None, "", []):
-            # Simple logic to keep only meaningful entries
-            processed_data[key] = value
-    return processed_data
+    _publish_event(event_type, data)
 
 
-def provide_immediate_insights(data: dict) -> dict:
+def subscribe_to_event(event_type: str, callback: Callable[[Dict[str, Any]], None]) -> None:
     """
-    Generate immediate, context-rich feedback from processed data.
+    Register a callback function to be invoked whenever an event of the specified
+    type is published. Callbacks receive the event's data payload, enabling them
+    to enrich or act upon the information.
 
     Args:
-        data (dict): The dictionary of processed data.
+        event_type: The string identifier representing the event category.
+        callback: A callable that takes a dictionary argument (the event data).
+    """
+    if event_type not in _EVENT_SUBSCRIBERS:
+        _EVENT_SUBSCRIBERS[event_type] = []
+    _EVENT_SUBSCRIBERS[event_type].append(callback)
+
+
+def get_current_state() -> Dict[str, Any]:
+    """
+    Retrieve a snapshot of the current single source of truth data.
 
     Returns:
-        dict: A dictionary containing insights or feedback.
+        A dictionary reflecting the entire known application state.
     """
-    # Implement logic to derive insights; for example, analyzing data trends,
-    # identifying patterns, or summarizing metrics in a user-friendly manner.
-    insights = {}
-    for key, value in data.items():
-        insights[key] = f"Insight about {key}: Value = {value}"
-    return insights
+    return dict(_SINGLE_SOURCE_OF_TRUTH)
 
 
-def main() -> None:
+def _setup_event_system() -> None:
     """
-    Main entry point that orchestrates the entire process:
-      1. Initializes the application context.
-      2. Gathers user inputs.
-      3. Reduces cognitive load by processing the data.
-      4. Provides immediate, context-rich insights.
+    Internal helper to initialize or reset event subscriptions. Ensures that
+    each invocation starts with a clean event registry.
     """
-    # Example config
-    config = {"log_level": "DEBUG", "max_retries": 3}
-    initialize_app(config)
-
-    # Example sources
-    data_source_fns = [
-        lambda: {"input1": 42},
-        {"input2": "example value"},
-        "unstructured_input"
-    ]
-    raw_inputs = gather_user_inputs(data_source_fns)
-    simplified_data = reduce_cognitive_load(raw_inputs)
-    insights = provide_immediate_insights(simplified_data)
-
-    # Example output demonstration
-    print("Simplified Data:", simplified_data)
-    print("Insights:", insights)
+    _EVENT_SUBSCRIBERS.clear()
 
 
-if __name__ == "__main__":
-    main()
+def _publish_event(event_type: str, data: Dict[str, Any]) -> None:
+    """
+    Internal helper to broadcast an event to all subscribed callbacks, enriching
+    the event data with a unique identifier and timestamp.
+
+    Args:
+        event_type: A string representing the event category.
+        data: The event data to be published.
+    """
+    subscribers = _EVENT_SUBSCRIBERS.get(event_type, [])
+    event_id = str(uuid.uuid4())
+    event_payload = {
+        "event_id": event_id,
+        "event_type": event_type,
+        "data": data,
+    }
+
+    for callback in subscribers:
+        callback(event_payload)
